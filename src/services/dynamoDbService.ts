@@ -1,5 +1,5 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, ScanCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 
 export interface ShopifyToken {
   shopDomain: string;
@@ -23,7 +23,21 @@ export interface ImageUpdateOperation {
   productsCount: number;
   imagesUpdated: number;
   errorMessage?: string;
-  csvData?: ImageUpdateCSVRow[];
+}
+
+export interface CSVFileRecord {
+  fileId: string;
+  operationId: string;
+  fileName: string;
+  fileType: 'template' | 'upload' | 'snapshot';
+  s3Key: string;
+  s3Bucket: string;
+  fileSize: number;
+  recordCount: number;
+  uploadedAt: string;
+  uploadedBy: string;
+  checksum: string;
+  status: 'pending' | 'processed' | 'archived';
 }
 
 export interface ImageUpdateCSVRow {
@@ -38,6 +52,7 @@ export class DynamoDBService {
   private client: DynamoDBDocumentClient;
   private tableName: string;
   private imageHistoryTableName: string;
+  private csvFilesTableName: string;
 
   constructor() {
     const dynamoClient = new DynamoDBClient({
@@ -60,8 +75,16 @@ export class DynamoDBService {
     }
     this.imageHistoryTableName = imageHistoryTableName || 'image-update-history';
     
+    // CSV files table name
+    let csvFilesTableName = process.env.AWS_DYNAMODB_CSV_FILES_TABLE;
+    if (csvFilesTableName && csvFilesTableName.includes('${env.')) {
+      csvFilesTableName = 'csv-files'; // Fallback to hardcoded value
+    }
+    this.csvFilesTableName = csvFilesTableName || 'csv-files';
+    
     console.log('DynamoDB table name:', this.tableName);
     console.log('Image history table name:', this.imageHistoryTableName);
+    console.log('CSV files table name:', this.csvFilesTableName);
   }
 
   async getShopifyToken(shopDomain: string): Promise<ShopifyToken | null> {
@@ -214,6 +237,120 @@ export class DynamoDBService {
     } catch (error) {
       console.error('Error retrieving image update history from DynamoDB:', error);
       throw new Error(`Failed to retrieve image update history: ${error}`);
+    }
+  }
+
+  // CSV File Management Methods
+  async saveCSVFileRecord(record: CSVFileRecord): Promise<void> {
+    try {
+      const command = new PutCommand({
+        TableName: this.csvFilesTableName,
+        Item: record,
+      });
+
+      await this.client.send(command);
+      console.log(`Saved CSV file record: ${record.fileId}`);
+    } catch (error) {
+      console.error('Error saving CSV file record to DynamoDB:', error);
+      throw new Error(`Failed to save CSV file record: ${error}`);
+    }
+  }
+
+  async getCSVFileRecord(fileId: string): Promise<CSVFileRecord | null> {
+    try {
+      const command = new GetCommand({
+        TableName: this.csvFilesTableName,
+        Key: {
+          fileId: fileId,
+        },
+      });
+
+      const response = await this.client.send(command);
+      
+      if (!response.Item) {
+        console.log(`No CSV file record found: ${fileId}`);
+        return null;
+      }
+
+      return response.Item as CSVFileRecord;
+    } catch (error) {
+      console.error('Error retrieving CSV file record from DynamoDB:', error);
+      throw new Error(`Failed to retrieve CSV file record: ${error}`);
+    }
+  }
+
+  async getCSVFilesForOperation(operationId: string, fileType?: string): Promise<CSVFileRecord[]> {
+    try {
+      let command: QueryCommand;
+
+      if (fileType) {
+        // Query by operation ID and file type
+        command = new QueryCommand({
+          TableName: this.csvFilesTableName,
+          IndexName: 'OperationIdFileTypeIndex',
+          KeyConditionExpression: 'operationId = :operationId AND fileType = :fileType',
+          ExpressionAttributeValues: {
+            ':operationId': operationId,
+            ':fileType': fileType,
+          },
+        });
+      } else {
+        // Query by operation ID only
+        command = new QueryCommand({
+          TableName: this.csvFilesTableName,
+          IndexName: 'OperationIdFileTypeIndex',
+          KeyConditionExpression: 'operationId = :operationId',
+          ExpressionAttributeValues: {
+            ':operationId': operationId,
+          },
+        });
+      }
+
+      const response = await this.client.send(command);
+      
+      if (!response.Items) {
+        return [];
+      }
+
+      return response.Items as CSVFileRecord[];
+    } catch (error) {
+      console.error('Error retrieving CSV files for operation from DynamoDB:', error);
+      throw new Error(`Failed to retrieve CSV files for operation: ${error}`);
+    }
+  }
+
+  async updateCSVFileRecord(fileId: string, updates: Partial<CSVFileRecord>): Promise<void> {
+    try {
+      const command = new PutCommand({
+        TableName: this.csvFilesTableName,
+        Item: {
+          fileId,
+          ...updates,
+        },
+      });
+
+      await this.client.send(command);
+      console.log(`Updated CSV file record: ${fileId}`);
+    } catch (error) {
+      console.error('Error updating CSV file record in DynamoDB:', error);
+      throw new Error(`Failed to update CSV file record: ${error}`);
+    }
+  }
+
+  async deleteCSVFileRecord(fileId: string): Promise<void> {
+    try {
+      const command = new DeleteCommand({
+        TableName: this.csvFilesTableName,
+        Key: {
+          fileId: fileId,
+        },
+      });
+
+      await this.client.send(command);
+      console.log(`Deleted CSV file record: ${fileId}`);
+    } catch (error) {
+      console.error('Error deleting CSV file record from DynamoDB:', error);
+      throw new Error(`Failed to delete CSV file record: ${error}`);
     }
   }
 }

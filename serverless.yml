@@ -9,6 +9,7 @@ provider:
     AWS_ROLE: ${env.AWS_ROLE}
     AWS_DYNAMODB_TABLE: shopify-connector-tokens
     AWS_DYNAMODB_IMAGE_HISTORY_TABLE: image-update-history
+    AWS_DYNAMODB_CSV_FILES_TABLE: csv-files
     AWS_S3_BUCKET_NAME: ${env.AWS_S3_BUCKET_NAME}
     AWS_S3_BUCKET_ARN: ${env.AWS_S3_BUCKET_ARN}
     NODE_ENV: ${env.NODE_ENV}
@@ -28,6 +29,8 @@ provider:
             - "arn:aws:dynamodb:us-east-2:767398030559:table/shopify-connector-tokens"
             - "arn:aws:dynamodb:us-east-2:767398030559:table/image-update-history"
             - "arn:aws:dynamodb:us-east-2:767398030559:table/image-update-history/index/*"
+            - "arn:aws:dynamodb:us-east-2:767398030559:table/csv-files"
+            - "arn:aws:dynamodb:us-east-2:767398030559:table/csv-files/index/*"
         - Effect: Allow
           Action:
             - s3:GetObject
@@ -154,6 +157,41 @@ resources:
               - AttributeName: userId
                 KeyType: HASH
               - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    CSVFilesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: csv-files
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: fileId
+            AttributeType: S
+          - AttributeName: operationId
+            AttributeType: S
+          - AttributeName: fileType
+            AttributeType: S
+          - AttributeName: uploadedAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: fileId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: OperationIdFileTypeIndex
+            KeySchema:
+              - AttributeName: operationId
+                KeyType: HASH
+              - AttributeName: fileType
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: FileTypeUploadedAtIndex
+            KeySchema:
+              - AttributeName: fileType
+                KeyType: HASH
+              - AttributeName: uploadedAt
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
