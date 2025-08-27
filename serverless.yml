@@ -1,0 +1,159 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+service: product-image-updater-server
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: us-east-2
+  environment:
+    AWS_ROLE: ${env.AWS_ROLE}
+    AWS_DYNAMODB_TABLE: shopify-connector-tokens
+    AWS_DYNAMODB_IMAGE_HISTORY_TABLE: image-update-history
+    AWS_S3_BUCKET_NAME: ${env.AWS_S3_BUCKET_NAME}
+    AWS_S3_BUCKET_ARN: ${env.AWS_S3_BUCKET_ARN}
+    NODE_ENV: ${env.NODE_ENV}
+    REGION: us-east-2
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource: 
+            - "arn:aws:dynamodb:us-east-2:767398030559:table/shopify-connector-tokens"
+            - "arn:aws:dynamodb:us-east-2:767398030559:table/image-update-history"
+            - "arn:aws:dynamodb:us-east-2:767398030559:table/image-update-history/index/*"
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:ListBucket
+          Resource:
+            - "arn:aws:s3:::product-image-updater"
+            - "arn:aws:s3:::product-image-updater/*"
+
+functions:
+  hello:
+    handler: handler.hello
+    events:
+      - http:
+          path: /hello
+          method: get
+          cors: true
+  
+  shopifyProxy:
+    handler: handler.shopifyProxy
+    events:
+      - http:
+          path: /api/shopify/products
+          method: get
+          cors: true
+      - http:
+          path: /api/shopify/collections
+          method: get
+          cors: true
+      - http:
+          path: /api/shopify/variants/{id}
+          method: put
+          cors: true
+  
+  imageUpdateProcessor:
+    handler: handler.imageUpdateProcessor
+    events:
+      - http:
+          path: /api/image-updates/operation
+          method: post
+          cors: true
+      - http:
+          path: /api/image-updates/operation/{operationId}
+          method: get
+          cors: true
+      - http:
+          path: /api/image-updates/operation/{operationId}/csv
+          method: get
+          cors: true
+      - http:
+          path: /api/image-updates/operation/{operationId}/upload
+          method: post
+          cors: true
+      - http:
+          path: /api/image-updates/operation/{operationId}/process
+          method: post
+          cors: true
+  
+  operationHistory:
+    handler: handler.operationHistory
+    events:
+      - http:
+          path: /api/operations/history
+          method: get
+          cors: true
+      - http:
+          path: /api/operations/{operationId}/rollback
+          method: post
+          cors: true
+      - http:
+          path: /api/operations/{operationId}/repeat
+          method: post
+          cors: true
+
+plugins:
+  - serverless-offline
+
+custom:
+  serverless-offline:
+    httpPort: 3001
+    lambdaPort: 3002
+    cors:
+      origin: "http://localhost:3000"
+      headers:
+        - Content-Type
+        - X-Amz-Date
+        - Authorization
+        - X-Api-Key
+        - X-Amz-Security-Token
+        - X-Amz-User-Agent
+      allowCredentials: true
+
+resources:
+  Resources:
+    ImageUpdateHistoryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: image-update-history
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: operationId
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+          - AttributeName: shopDomain
+            AttributeType: S
+          - AttributeName: userId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: operationId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: ShopDomainTimestampIndex
+            KeySchema:
+              - AttributeName: shopDomain
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: UserIdTimestampIndex
+            KeySchema:
+              - AttributeName: userId
+                KeyType: HASH
+              - AttributeName: timestamp
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
