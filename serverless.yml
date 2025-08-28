@@ -38,8 +38,8 @@ provider:
             - s3:DeleteObject
             - s3:ListBucket
           Resource:
-            - "arn:aws:s3:::product-image-updater"
-            - "arn:aws:s3:::product-image-updater/*"
+            - "arn:aws:s3:::product-image-updater-store"
+            - "arn:aws:s3:::product-image-updater-store/*"
 
 functions:
   hello:

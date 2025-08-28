@@ -28,9 +28,9 @@ export class S3Service {
     // Handle case where env var might not be resolved properly
     let bucketName = process.env.AWS_S3_BUCKET_NAME;
     if (bucketName && bucketName.includes('${env.')) {
-      bucketName = 'product-image-updater'; // Fallback to hardcoded value
+      bucketName = 'product-image-updater-store'; // Fallback to hardcoded value
     }
-    this.bucketName = bucketName || 'product-image-updater';
+    this.bucketName = bucketName || 'product-image-updater-store';
     
     console.log('S3 bucket name:', this.bucketName);
   }

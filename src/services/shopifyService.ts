@@ -65,16 +65,23 @@ export class ShopifyService {
   }
 
   private async getAuthToken(): Promise<string> {
+    console.log('Getting Shopify auth token...');
     const token = await this.dynamoDbService.getDefaultShopifyToken();
     if (!token) {
+      console.error('No Shopify auth token found in DynamoDB');
       throw new Error('No Shopify auth token found in DynamoDB');
     }
+    console.log('Shopify auth token found for shop:', token.shopDomain);
     return token.accessToken;
   }
 
   private async makeGraphQLQuery(query: string, variables?: any): Promise<any> {
+    console.log('Making GraphQL query to Shopify...');
     const accessToken = await this.getAuthToken();
     const url = `${this.baseUrl}/admin/api/2025-01/graphql.json`;
+    
+    console.log('GraphQL URL:', url);
+    console.log('GraphQL variables:', variables);
 
     try {
       const response = await fetch(url, {
@@ -89,13 +96,19 @@ export class ShopifyService {
         }),
       });
 
+      console.log('GraphQL response status:', response.status);
+
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GraphQL response error:', errorText);
         throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
       }
 
       const data = await response.json() as any;
+      console.log('GraphQL response data:', JSON.stringify(data, null, 2));
       
       if (data.errors) {
+        console.error('GraphQL errors:', data.errors);
         throw new Error(`GraphQL errors: ${JSON.stringify(data.errors)}`);
       }
 
@@ -224,6 +237,10 @@ export class ShopifyService {
               title
               handle
               updatedAt
+              description
+              productsCount {
+                count
+              }
             }
           }
         }
@@ -238,6 +255,8 @@ export class ShopifyService {
       title: edge.node.title,
       handle: edge.node.handle,
       updatedAt: edge.node.updatedAt,
+      description: edge.node.description || '',
+      products_count: edge.node.productsCount?.count || 0,
     }));
 
     return { collections };
@@ -245,6 +264,7 @@ export class ShopifyService {
 
   // Get products from a specific collection
   async getProductsFromCollection(collectionId: string, limit: number = 50): Promise<{ products: ShopifyProduct[] }> {
+    console.log('Getting products from collection:', collectionId, 'limit:', limit);
     const query = `
       query GetCollectionProducts($id: ID!, $first: Int!) {
         collection(id: $id) {
@@ -283,7 +303,6 @@ export class ShopifyService {
                       id
                       url
                       altText
-                      position
                     }
                   }
                 }
@@ -333,7 +352,7 @@ export class ShopifyService {
         id: iEdge.node.id,
         src: iEdge.node.url,
         alt: iEdge.node.altText || '',
-        position: iEdge.node.position,
+        position: 0, // Default position since it's not available in GraphQL
       })),
       options: edge.node.options.map((option: any) => ({
         id: option.id,
@@ -453,7 +472,7 @@ export class ShopifyService {
   }
 
   // Delete old image
-  async deleteImage(imageId: string): Promise<void> {
+  async deleteImage(imageId: string, productId?: string): Promise<void> {
     try {
       const accessToken = await this.getAuthToken();
       const numericImageId = imageId.split('/').pop();
@@ -462,7 +481,15 @@ export class ShopifyService {
         throw new Error('Invalid image ID format');
       }
 
-      const url = `${this.baseUrl}/admin/api/2024-01/images/${numericImageId}.json`;
+      // If productId is provided, use the product-specific endpoint
+      let url: string;
+      if (productId) {
+        const numericProductId = productId.split('/').pop();
+        url = `${this.baseUrl}/admin/api/2024-01/products/${numericProductId}/images/${numericImageId}.json`;
+      } else {
+        // Fallback to the general endpoint (may not work for all cases)
+        url = `${this.baseUrl}/admin/api/2024-01/images/${numericImageId}.json`;
+      }
       
       const response = await fetch(url, {
         method: 'DELETE',
@@ -520,7 +547,6 @@ export class ShopifyService {
                 id
                 url
                 altText
-                position
               }
             }
           }
@@ -569,7 +595,7 @@ export class ShopifyService {
           id: iEdge.node.id,
           src: iEdge.node.url,
           alt: iEdge.node.altText || '',
-          position: iEdge.node.position,
+          position: 0, // Default position since it's not available in GraphQL
         })),
         options: product.options.map((option: any) => ({
           id: option.id,

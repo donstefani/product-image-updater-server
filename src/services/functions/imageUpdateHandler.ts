@@ -30,7 +30,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
     console.log(`Image update API call: ${event.httpMethod} ${path}`);
 
     // Create operation
-    if (event.httpMethod === 'POST' && path.includes('/api/image-updates/operation')) {
+    if (event.httpMethod === 'POST' && path.match(/\/api\/image-updates\/operation$/)) {
       const body = JSON.parse(event.body || '{}');
       const { collection_id, product_ids } = body;
 
@@ -187,28 +187,74 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         throw new Error('Operation ID is required');
       }
 
-      // Parse multipart form data (simplified - in production you'd use a proper parser)
+      // Parse multipart form data
       const body = event.body;
       if (!body) {
         throw new Error('No file uploaded');
       }
 
-      // For now, we'll assume the CSV data is passed as JSON
-      // In production, you'd parse the actual multipart form data
-      const csvData: ImageUpdateCSVRow[] = JSON.parse(body);
+      // Check if body is base64 encoded
+      let csvContent: string;
+      if (event.isBase64Encoded) {
+        // Decode base64 body
+        const decodedBody = Buffer.from(body, 'base64').toString('utf-8');
+        console.log('Decoded body preview:', decodedBody.substring(0, 200));
+        
+        // Try to find the boundary in the Content-Type header or in the body
+        let boundary = '';
+        
+        // First, try to find boundary in the body itself
+        const boundaryMatch = decodedBody.match(/--([a-zA-Z0-9]+)/);
+        if (boundaryMatch && boundaryMatch[1]) {
+          boundary = boundaryMatch[1];
+          console.log('Found boundary in body:', boundary);
+        } else {
+          // Try to find it in Content-Type header
+          const contentTypeMatch = decodedBody.match(/Content-Type: multipart\/form-data; boundary=([^\r\n]+)/);
+          if (contentTypeMatch && contentTypeMatch[1]) {
+            boundary = contentTypeMatch[1];
+            console.log('Found boundary in Content-Type:', boundary);
+          } else {
+            throw new Error('Could not find multipart boundary');
+          }
+        }
+        
+        // Split by boundary
+        const parts = decodedBody.split(`--${boundary}`);
+        console.log('Found', parts.length, 'parts');
+        
+        // Find the CSV file part
+        let csvPart = '';
+        for (let i = 0; i < parts.length; i++) {
+          const part = parts[i];
+          if (!part) continue;
+          
+          console.log(`Part ${i} preview:`, part.substring(0, 100));
+          
+          if (part.includes('Content-Type: text/csv') || part.includes('name="csv"') || part.includes('filename=')) {
+            // Extract the CSV content (everything after the headers)
+            const contentStart = part.indexOf('\r\n\r\n');
+            if (contentStart !== -1) {
+              csvPart = part.substring(contentStart + 4);
+              console.log('Found CSV part, length:', csvPart.length);
+              break;
+            }
+          }
+        }
+        
+        if (!csvPart) {
+          throw new Error('No CSV file found in upload');
+        }
+        
+        csvContent = csvPart.trim();
+      } else {
+        // Assume body is already CSV content
+        csvContent = body;
+      }
 
-      // Generate CSV content from the uploaded data
-      const csvHeaders = ['product_id', 'product_handle', 'current_image_id', 'collection_name', 'new_image_url'];
-      const csvContent = [
-        csvHeaders.join(','),
-        ...csvData.map(row => [
-          row.product_id,
-          row.product_handle,
-          row.current_image_id,
-          row.collection_name,
-          row.new_image_url
-        ].join(','))
-      ].join('\n');
+      // Parse CSV content to get record count
+      const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
+      const recordCount = Math.max(0, lines.length - 1); // Subtract 1 for header
 
       // Upload CSV to S3
       const { s3Key, fileSize, checksum } = await s3Service.uploadCSVFile(
@@ -228,7 +274,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         s3Key,
         s3Bucket: s3Service['bucketName'],
         fileSize,
-        recordCount: csvData.length,
+        recordCount,
         uploadedAt: new Date().toISOString(),
         uploadedBy: 'default-user',
         checksum,
@@ -243,7 +289,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         body: JSON.stringify({ 
           success: true, 
           message: 'CSV uploaded successfully',
-          recordsProcessed: csvData.length 
+          recordsProcessed: recordCount 
         }),
       };
     }
@@ -268,19 +314,60 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
       // Download CSV content from S3
       const { content: csvContent } = await s3Service.downloadCSVFile(latestFile.s3Key);
 
-      // Parse CSV content
+      // Parse CSV content with proper handling of quoted values
       const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
       const headers = lines[0].split(',');
+      
+      // Simple CSV parser that handles quoted values
+      const parseCSVLine = (line: string): string[] => {
+        const result: string[] = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim());
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        
+        result.push(current.trim());
+        return result;
+      };
+      
       const csvData: ImageUpdateCSVRow[] = lines.slice(1).map(line => {
-        const values = line.split(',');
+        const values = parseCSVLine(line);
+        const newImageUrl = values[4] || '';
+        
+        // Validate URL format
+        if (newImageUrl && !isValidImageUrl(newImageUrl)) {
+          console.warn(`Invalid image URL in CSV: ${newImageUrl}`);
+        }
+        
         return {
           product_id: values[0] || '',
           product_handle: values[1] || '',
           current_image_id: values[2] || '',
           collection_name: values[3] || '',
-          new_image_url: values[4] || '',
+          new_image_url: newImageUrl,
         };
       });
+      
+      // Helper function to validate image URLs
+      function isValidImageUrl(url: string): boolean {
+        try {
+          const urlObj = new URL(url);
+          return urlObj.protocol === 'http:' || urlObj.protocol === 'https:';
+        } catch {
+          return false;
+        }
+      }
 
       // Update status to processing
       await dynamoDbService.updateImageUpdateOperation(operationId, {
@@ -294,6 +381,14 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
       for (const row of csvData) {
         if (!row.new_image_url) {
           continue; // Skip rows without new image URL
+        }
+
+        // Skip invalid URLs
+        if (!isValidImageUrl(row.new_image_url)) {
+          const errorMsg = `Skipping product ${row.product_id}: Invalid image URL "${row.new_image_url}"`;
+          console.warn(errorMsg);
+          errors.push(errorMsg);
+          continue;
         }
 
         try {
@@ -318,7 +413,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
           // Delete old image if it exists
           if (row.current_image_id) {
             try {
-              await shopifyService.deleteImage(row.current_image_id);
+              await shopifyService.deleteImage(row.current_image_id, row.product_id);
             } catch (deleteError) {
               console.warn(`Failed to delete old image ${row.current_image_id}:`, deleteError);
             }
