@@ -498,6 +498,12 @@ export class ShopifyService {
         },
       });
 
+      if (response.status === 404) {
+        // Image already deleted or doesn't exist - treat as success
+        console.log(`Image ${imageId} was already deleted or doesn't exist`);
+        return;
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`Image deletion failed: ${response.status} ${response.statusText} - ${errorText}`);

@@ -71,7 +71,7 @@ export async function shopifyProxyHandler(event: APIGatewayProxyEvent): Promise<
             throw new Error('Variant ID is required');
           }
           
-          result = await shopifyService.updateProductVariant(variantId, price);
+          result = await shopifyService.updateVariantImage(variantId, price);
         } else {
           throw new Error(`Unsupported PUT endpoint: ${path}`);
         }

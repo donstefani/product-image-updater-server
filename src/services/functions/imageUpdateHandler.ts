@@ -55,7 +55,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
           csvData.push({
             product_id: product.id,
             product_handle: product.handle,
-            current_image_id: product.images[0].id,
+            current_image_id: product.images[0]?.id || '',
             collection_name: collectionName,
             new_image_url: '', // User will fill this
           });
@@ -166,7 +166,12 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
       )[0];
 
+      if (!latestFile) {
+        throw new Error('No CSV file found for this operation');
+      }
+
       // Download CSV content from S3
+
       const { content: csvContent } = await s3Service.downloadCSVFile(latestFile.s3Key);
 
       return {
@@ -174,7 +179,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         headers: {
           ...headers,
           'Content-Type': 'text/csv',
-          'Content-Disposition': `attachment; filename="${latestFile.fileName}"`,
+          'Content-Disposition': `attachment; filename="${latestFile?.fileName}"`,
         },
         body: csvContent,
       };
@@ -311,12 +316,19 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
       )[0];
 
+      if (!latestFile) {
+        throw new Error('No CSV file found for this operation');
+      }
+
       // Download CSV content from S3
       const { content: csvContent } = await s3Service.downloadCSVFile(latestFile.s3Key);
 
       // Parse CSV content with proper handling of quoted values
       const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
-      const headers = lines[0].split(',');
+      if (lines.length === 0) {
+        throw new Error('CSV file is empty');
+      }
+      const csvHeaders = lines[0]?.split(',') || [];
       
       // Simple CSV parser that handles quoted values
       const parseCSVLine = (line: string): string[] => {
@@ -437,7 +449,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
 
       // Update CSV file status
       await dynamoDbService.updateCSVFileRecord(latestFile.fileId, {
-        status: finalStatus,
+        status: 'processed',
       });
 
       return {
