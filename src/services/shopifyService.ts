@@ -226,11 +226,14 @@ export class ShopifyService {
     return { products };
   }
 
-  // Get collections from shop
-  async getCollections(limit: number = 50): Promise<{ collections: ShopifyCollection[] }> {
+  // Get collections from shop with pagination support
+  async getCollections(limit: number = 50, after?: string): Promise<{ 
+    collections: ShopifyCollection[], 
+    pageInfo: { hasNextPage: boolean, endCursor?: string } 
+  }> {
     const query = `
-      query GetCollections($first: Int!) {
-        collections(first: $first) {
+      query GetCollections($first: Int!, $after: String) {
+        collections(first: $first, after: $after) {
           edges {
             node {
               id
@@ -242,12 +245,17 @@ export class ShopifyService {
                 count
               }
             }
+            cursor
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
       }
     `;
 
-    const variables = { first: limit };
+    const variables = { first: limit, after };
     const data = await this.makeGraphQLQuery(query, variables);
     
     const collections = data.collections.edges.map((edge: any) => ({
@@ -259,7 +267,10 @@ export class ShopifyService {
       products_count: edge.node.productsCount?.count || 0,
     }));
 
-    return { collections };
+    return { 
+      collections, 
+      pageInfo: data.collections.pageInfo 
+    };
   }
 
   // Get products from a specific collection

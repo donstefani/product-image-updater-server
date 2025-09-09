@@ -45,12 +45,13 @@ export async function shopifyProxyHandler(event: APIGatewayProxyEvent): Promise<
           }
         } else if (path.includes('/api/shopify/collections')) {
           const limit = event.queryStringParameters?.limit ? parseInt(event.queryStringParameters.limit) : 50;
+          const after = event.queryStringParameters?.after;
           const collectionId = event.queryStringParameters?.id;
           
           if (collectionId) {
             result = await shopifyService.getCollection(collectionId);
           } else {
-            result = await shopifyService.getCollections(limit);
+            result = await shopifyService.getCollections(limit, after);
           }
         } else {
           throw new Error(`Unsupported GET endpoint: ${path}`);
