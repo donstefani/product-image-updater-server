@@ -48,6 +48,13 @@ export interface ImageUpdateCSVRow {
   new_image_url: string;
 }
 
+export interface OAuthState {
+  shopDomain: string;
+  state: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export class DynamoDBService {
   private client: DynamoDBDocumentClient;
   private tableName: string;
@@ -92,7 +99,7 @@ export class DynamoDBService {
       const command = new GetCommand({
         TableName: this.tableName,
         Key: {
-          shopDomain: shopDomain,
+          pk: `token#${shopDomain}`,
         },
       });
 
@@ -103,7 +110,9 @@ export class DynamoDBService {
         return null;
       }
 
-      return response.Item as ShopifyToken;
+      // Remove the pk field from the response
+      const { pk, ...token } = response.Item;
+      return token as ShopifyToken;
     } catch (error) {
       console.error('Error retrieving Shopify token from DynamoDB:', error);
       throw new Error(`Failed to retrieve Shopify token: ${error}`);
@@ -351,6 +360,102 @@ export class DynamoDBService {
     } catch (error) {
       console.error('Error deleting CSV file record from DynamoDB:', error);
       throw new Error(`Failed to delete CSV file record: ${error}`);
+    }
+  }
+
+  // OAuth State Management Methods
+  async storeOAuthState(shopDomain: string, state: string): Promise<void> {
+    try {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 minutes from now
+
+      const oauthState: OAuthState = {
+        shopDomain,
+        state,
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      };
+
+      const command = new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          ...oauthState,
+          pk: `oauth_state#${shopDomain}#${state}`, // Composite key for OAuth states
+        },
+      });
+
+      await this.client.send(command);
+      console.log(`Stored OAuth state for shop: ${shopDomain}`);
+    } catch (error) {
+      console.error('Error storing OAuth state in DynamoDB:', error);
+      throw new Error(`Failed to store OAuth state: ${error}`);
+    }
+  }
+
+  async verifyOAuthState(shopDomain: string, state: string): Promise<boolean> {
+    try {
+      const command = new GetCommand({
+        TableName: this.tableName,
+        Key: {
+          pk: `oauth_state#${shopDomain}#${state}`,
+        },
+      });
+
+      const response = await this.client.send(command);
+      
+      if (!response.Item) {
+        console.log(`No OAuth state found for shop: ${shopDomain}`);
+        return false;
+      }
+
+      const oauthState = response.Item as OAuthState;
+      const now = new Date();
+      const expiresAt = new Date(oauthState.expiresAt);
+
+      if (now > expiresAt) {
+        console.log(`OAuth state expired for shop: ${shopDomain}`);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error verifying OAuth state in DynamoDB:', error);
+      throw new Error(`Failed to verify OAuth state: ${error}`);
+    }
+  }
+
+  async deleteOAuthState(shopDomain: string, state: string): Promise<void> {
+    try {
+      const command = new DeleteCommand({
+        TableName: this.tableName,
+        Key: {
+          pk: `oauth_state#${shopDomain}#${state}`,
+        },
+      });
+
+      await this.client.send(command);
+      console.log(`Deleted OAuth state for shop: ${shopDomain}`);
+    } catch (error) {
+      console.error('Error deleting OAuth state from DynamoDB:', error);
+      throw new Error(`Failed to delete OAuth state: ${error}`);
+    }
+  }
+
+  async storeShopifyToken(token: ShopifyToken): Promise<void> {
+    try {
+      const command = new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          ...token,
+          pk: `token#${token.shopDomain}`, // Use composite key for tokens
+        },
+      });
+
+      await this.client.send(command);
+      console.log(`Stored Shopify token for shop: ${token.shopDomain}`);
+    } catch (error) {
+      console.error('Error storing Shopify token in DynamoDB:', error);
+      throw new Error(`Failed to store Shopify token: ${error}`);
     }
   }
 }

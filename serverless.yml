@@ -14,6 +14,9 @@ provider:
     AWS_S3_BUCKET_ARN: ${env.AWS_S3_BUCKET_ARN}
     NODE_ENV: ${env.NODE_ENV}
     REGION: us-east-2
+    SHOPIFY_API_KEY: ${env.SHOPIFY_API_KEY}
+    SHOPIFY_API_SECRET: ${env.SHOPIFY_API_SECRET}
+    APP_URL: ${env.APP_URL}
   iam:
     role:
       statements:
@@ -49,6 +52,40 @@ functions:
           path: /hello
           method: get
           cors: true
+  
+  oauth:
+    handler: handler.oauth
+    events:
+      - http:
+          path: /auth/install
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - Cookie
+              - Set-Cookie
+            allowCredentials: true
+      - http:
+          path: /auth/callback
+          method: get
+          cors:
+            origin: '*'
+            headers:
+              - Content-Type
+              - X-Amz-Date
+              - Authorization
+              - X-Api-Key
+              - X-Amz-Security-Token
+              - X-Amz-User-Agent
+              - Cookie
+              - Set-Cookie
+            allowCredentials: true
   
   shopifyProxy:
     handler: handler.shopifyProxy

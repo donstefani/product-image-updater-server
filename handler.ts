@@ -2,6 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { shopifyProxyHandler } from './src/services/functions/shopifyProxyHandler';
 import { imageUpdateHandler } from './src/services/functions/imageUpdateHandler';
 import { operationHistoryHandler } from './src/services/functions/operationHistoryHandler';
+import { oauthHandler } from './src/services/functions/oauthHandler';
 
 // Test function
 export const hello = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -69,4 +70,9 @@ export const imageUpdateProcessor = async (event: APIGatewayProxyEvent): Promise
 // Operation history function
 export const operationHistory = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   return operationHistoryHandler(event);
+};
+
+// OAuth function
+export const oauth = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  return oauthHandler(event);
 };
