@@ -5,6 +5,8 @@ import { S3Service } from '../s3Service';
 import { v4 as uuidv4 } from 'uuid';
 
 export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+  console.log('imageUpdateHandler called with event:', JSON.stringify(event, null, 2));
+  
   const headers = {
     'Access-Control-Allow-Origin': event.headers.origin || '*',
     'Access-Control-Allow-Headers': '*',
@@ -14,6 +16,7 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
 
   // Handle CORS preflight requests
   if (event.httpMethod === 'OPTIONS') {
+    console.log('Handling CORS preflight request');
     return {
       statusCode: 200,
       headers,
@@ -22,9 +25,34 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
   }
 
   try {
-    const dynamoDbService = new DynamoDBService();
-    const shopifyService = new ShopifyService();
-    const s3Service = new S3Service();
+    console.log('Initializing services...');
+    
+    let dynamoDbService;
+    try {
+      dynamoDbService = new DynamoDBService();
+      console.log('DynamoDB service initialized');
+    } catch (error) {
+      console.error('Failed to initialize DynamoDB service:', error);
+      throw new Error(`DynamoDB service initialization failed: ${error}`);
+    }
+    
+    let shopifyService;
+    try {
+      shopifyService = new ShopifyService();
+      console.log('Shopify service initialized');
+    } catch (error) {
+      console.error('Failed to initialize Shopify service:', error);
+      throw new Error(`Shopify service initialization failed: ${error}`);
+    }
+    
+    let s3Service;
+    try {
+      s3Service = new S3Service();
+      console.log('S3 service initialized');
+    } catch (error) {
+      console.error('Failed to initialize S3 service:', error);
+      throw new Error(`S3 service initialization failed: ${error}`);
+    }
     const path = event.path;
 
     console.log(`Image update API call: ${event.httpMethod} ${path}`);
@@ -340,8 +368,16 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
       const lines = csvContent.split('\n').filter(line => line.trim().length > 0);
       if (lines.length === 0) {
         throw new Error('CSV file is empty');
-      }
+        }
+        
+        console.log(`CSV file has ${lines.length} lines`);
+      console.log('First few lines of CSV:');
+      lines.slice(0, 5).forEach((line, index) => {
+        console.log(`Line ${index}: ${line}`);
+      });
+      
       const csvHeaders = lines[0]?.split(',') || [];
+      console.log('CSV headers:', csvHeaders);
       
       // Simple CSV parser that handles quoted values
       const parseCSVLine = (line: string): string[] => {
@@ -366,22 +402,61 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
         return result;
       };
       
-      const csvData: ImageUpdateCSVRow[] = lines.slice(1).map(line => {
-        const values = parseCSVLine(line);
-        const newImageUrl = values[4] || '';
-        
-        // Validate URL format
-        if (newImageUrl && !isValidImageUrl(newImageUrl)) {
-          console.warn(`Invalid image URL in CSV: ${newImageUrl}`);
-        }
-        
-        return {
-          product_id: values[0] || '',
-          product_handle: values[1] || '',
-          current_image_id: values[2] || '',
-          collection_name: values[3] || '',
-          new_image_url: newImageUrl,
-        };
+      // Process data rows (skip header)
+      const dataLines = lines.slice(1);
+      console.log(`Processing ${dataLines.length} data rows (skipped header)`);
+      
+      const csvData: ImageUpdateCSVRow[] = dataLines
+        .filter((line, index) => {
+          // Skip lines that look like headers or are empty
+          const values = parseCSVLine(line);
+          const productId = values[0] || '';
+          const newImageUrl = values[4] || '';
+          
+          // Skip if product_id is "product_id" (header row)
+          if (productId === 'product_id') {
+            console.log(`Skipping header row at line ${index + 2}: ${line}`);
+            return false;
+          }
+          
+          // Skip if new_image_url is "new_image_url" (header row)
+          if (newImageUrl === 'new_image_url') {
+            console.log(`Skipping header row at line ${index + 2}: ${line}`);
+            return false;
+          }
+          
+          // Skip empty lines
+          if (!productId.trim()) {
+            console.log(`Skipping empty row at line ${index + 2}: ${line}`);
+            return false;
+          }
+          
+          return true;
+        })
+        .map((line, index) => {
+          console.log(`Processing line ${index + 2}: ${line}`);
+          const values = parseCSVLine(line);
+          console.log(`Parsed values:`, values);
+          
+          const newImageUrl = values[4] || '';
+          
+          // Validate URL format
+          if (newImageUrl && !isValidImageUrl(newImageUrl)) {
+            console.warn(`Invalid image URL in CSV line ${index + 2}: ${newImageUrl}`);
+          }
+          
+          return {
+            product_id: values[0] || '',
+            product_handle: values[1] || '',
+            current_image_id: values[2] || '',
+            collection_name: values[3] || '',
+            new_image_url: newImageUrl,
+          };
+        });
+      
+      console.log(`Parsed ${csvData.length} CSV rows`);
+      csvData.forEach((row, index) => {
+        console.log(`Row ${index + 1}:`, row);
       });
       
       // Helper function to validate image URLs
@@ -432,11 +507,14 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
           const productResponse = await shopifyService.getProduct(productId);
           const product = productResponse.product;
 
-          // Track which old images to delete (only delete once per unique image)
-          const imagesToDelete = new Set<string>();
+          // Collect ALL existing images to delete (complete replacement)
+          const allExistingImages = product.images.map(img => img.id);
+          console.log(`Product ${productId} currently has ${allExistingImages.length} images. Will delete all and replace with ${rows.length} new images.`);
+
+          // Track processed images to avoid duplicates
           const processedImages = new Set<string>();
 
-          // Process each image for this product
+          // Upload all new images first
           for (let i = 0; i < rows.length; i++) {
             const row = rows[i];
             if (!row) continue; // Skip if row is undefined
@@ -448,35 +526,42 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
             }
             processedImages.add(row.new_image_url);
 
-            // Upload new image with appropriate position
-            const position = i + 1; // Position 1, 2, 3, etc.
-            const imageResponse = await shopifyService.uploadImage(
-              productId, 
-              row.new_image_url, 
-              position
-            );
+            try {
+              // Upload new image with appropriate position
+              const position = i + 1; // Position 1, 2, 3, etc.
+              console.log(`Attempting to upload image ${i + 1}/${rows.length} for product ${productId} at position ${position}: ${row.new_image_url}`);
+              
+              const imageResponse = await shopifyService.uploadImage(
+                productId, 
+                row.new_image_url, 
+                position
+              );
 
-            console.log(`Uploaded image ${i + 1}/${rows.length} for product ${productId} at position ${position}`);
+              console.log(`Successfully uploaded image ${i + 1}/${rows.length} for product ${productId} at position ${position}. Image ID: ${imageResponse.image.id}`);
 
-            // Update variants that were using the old image (only for the first occurrence)
-            if (i === 0 && row.current_image_id) {
-              for (const variant of product.variants) {
-                if (variant.image_id === row.current_image_id) {
-                  await shopifyService.updateVariantImage(variant.id, imageResponse.image.id);
+              // Update variants to use the new main image (first image becomes the main image)
+              if (i === 0) {
+                console.log(`Updating variants for product ${productId} to use new main image ${imageResponse.image.id}`);
+                for (const variant of product.variants) {
+                  if (variant.image_id && allExistingImages.includes(variant.image_id)) {
+                    await shopifyService.updateVariantImage(variant.id, imageResponse.image.id);
+                    console.log(`Updated variant ${variant.id} to use new main image`);
+                  }
                 }
               }
-            }
 
-            // Mark old image for deletion (only if it's unique)
-            if (row.current_image_id) {
-              imagesToDelete.add(row.current_image_id);
+              imagesUpdated++;
+            } catch (uploadError) {
+              console.error(`Failed to upload image ${i + 1}/${rows.length} for product ${productId}:`, uploadError);
+              const errorMsg = `Failed to upload image ${i + 1} for product ${productId}: ${uploadError}`;
+              errors.push(errorMsg);
+              // Continue with next image instead of stopping
             }
-
-            imagesUpdated++;
           }
 
-          // Delete old images after all new images are uploaded
-          for (const imageId of imagesToDelete) {
+          // Delete ALL old images after all new images are uploaded
+          console.log(`Deleting ${allExistingImages.length} old images for product ${productId}`);
+          for (const imageId of allExistingImages) {
             try {
               await shopifyService.deleteImage(imageId, productId);
               console.log(`Deleted old image ${imageId} for product ${productId}`);

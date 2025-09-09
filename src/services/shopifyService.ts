@@ -396,6 +396,8 @@ export class ShopifyService {
   // Upload image to Shopify
   async uploadImage(productId: string, imageUrl: string, position: number = 1): Promise<{ image: ShopifyProductImage }> {
     try {
+      console.log(`Uploading image to product ${productId} at position ${position}: ${imageUrl}`);
+      
       const accessToken = await this.getAuthToken();
       const numericProductId = productId.split('/').pop();
       
@@ -405,27 +407,34 @@ export class ShopifyService {
 
       const url = `${this.baseUrl}/admin/api/2024-01/products/${numericProductId}/images.json`;
       
+      const requestBody = {
+        image: {
+          src: imageUrl,
+          position: position,
+        },
+      };
+      
+      console.log(`Making request to ${url} with body:`, JSON.stringify(requestBody, null, 2));
+      
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Shopify-Access-Token': accessToken,
         },
-        body: JSON.stringify({
-          image: {
-            src: imageUrl,
-            position: position,
-          },
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
+        console.error(`Image upload failed: ${response.status} ${response.statusText} - ${errorText}`);
         throw new Error(`Image upload failed: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
       const data = await response.json() as any;
       const image = data.image;
+      
+      console.log(`Image upload successful. Response:`, JSON.stringify(data, null, 2));
       
       return {
         image: {

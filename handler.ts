@@ -44,7 +44,26 @@ export const shopifyProxy = async (event: APIGatewayProxyEvent): Promise<APIGate
 
 // Image update processor function
 export const imageUpdateProcessor = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  return imageUpdateHandler(event);
+  try {
+    console.log('imageUpdateProcessor called with event:', JSON.stringify(event, null, 2));
+    return await imageUpdateHandler(event);
+  } catch (error) {
+    console.error('Error in imageUpdateProcessor:', error);
+    return {
+      statusCode: 500,
+      headers: {
+        'Access-Control-Allow-Origin': event.headers.origin || '*',
+        'Access-Control-Allow-Headers': '*',
+        'Access-Control-Allow-Methods': '*',
+        'Access-Control-Max-Age': '86400',
+      },
+      body: JSON.stringify({ 
+        error: 'Internal server error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      }),
+    };
+  }
 };
 
 // Operation history function
