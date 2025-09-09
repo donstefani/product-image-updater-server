@@ -52,6 +52,8 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
 
       for (const product of productsResponse.products) {
         if (product_ids.includes(product.id) && product.images.length > 0) {
+          // Create multiple rows per product to allow multiple image uploads
+          // First row: replace the main image (position 1)
           csvData.push({
             product_id: product.id,
             product_handle: product.handle,
@@ -59,6 +61,17 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
             collection_name: collectionName,
             new_image_url: '', // User will fill this
           });
+          
+          // Additional rows: add more images (positions 2, 3, 4, 5)
+          for (let i = 1; i < 5; i++) {
+            csvData.push({
+              product_id: product.id,
+              product_handle: product.handle,
+              current_image_id: '', // No current image for additional positions
+              collection_name: collectionName,
+              new_image_url: '', // User will fill this
+            });
+          }
         }
       }
 
@@ -389,7 +402,8 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
       let imagesUpdated = 0;
       const errors: string[] = [];
 
-      // Process each CSV row
+      // Group rows by product_id to handle multiple images per product
+      const productGroups = new Map<string, ImageUpdateCSVRow[]>();
       for (const row of csvData) {
         if (!row.new_image_url) {
           continue; // Skip rows without new image URL
@@ -403,37 +417,76 @@ export async function imageUpdateHandler(event: APIGatewayProxyEvent): Promise<A
           continue;
         }
 
+        if (!productGroups.has(row.product_id)) {
+          productGroups.set(row.product_id, []);
+        }
+        productGroups.get(row.product_id)!.push(row);
+      }
+
+      // Process each product group
+      for (const [productId, rows] of productGroups) {
         try {
+          console.log(`Processing product ${productId} with ${rows.length} images`);
+          
           // Get current product
-          const productResponse = await shopifyService.getProduct(row.product_id);
+          const productResponse = await shopifyService.getProduct(productId);
           const product = productResponse.product;
 
-          // Upload new image
-          const imageResponse = await shopifyService.uploadImage(
-            row.product_id, 
-            row.new_image_url, 
-            1 // Position 1 (main image)
-          );
+          // Track which old images to delete (only delete once per unique image)
+          const imagesToDelete = new Set<string>();
+          const processedImages = new Set<string>();
 
-          // Update variants that were using the old image
-          for (const variant of product.variants) {
-            if (variant.image_id === row.current_image_id) {
-              await shopifyService.updateVariantImage(variant.id, imageResponse.image.id);
+          // Process each image for this product
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row) continue; // Skip if row is undefined
+            
+            // Skip if we've already processed this exact image URL for this product
+            if (processedImages.has(row.new_image_url)) {
+              console.log(`Skipping duplicate image URL for product ${productId}: ${row.new_image_url}`);
+              continue;
             }
+            processedImages.add(row.new_image_url);
+
+            // Upload new image with appropriate position
+            const position = i + 1; // Position 1, 2, 3, etc.
+            const imageResponse = await shopifyService.uploadImage(
+              productId, 
+              row.new_image_url, 
+              position
+            );
+
+            console.log(`Uploaded image ${i + 1}/${rows.length} for product ${productId} at position ${position}`);
+
+            // Update variants that were using the old image (only for the first occurrence)
+            if (i === 0 && row.current_image_id) {
+              for (const variant of product.variants) {
+                if (variant.image_id === row.current_image_id) {
+                  await shopifyService.updateVariantImage(variant.id, imageResponse.image.id);
+                }
+              }
+            }
+
+            // Mark old image for deletion (only if it's unique)
+            if (row.current_image_id) {
+              imagesToDelete.add(row.current_image_id);
+            }
+
+            imagesUpdated++;
           }
 
-          // Delete old image if it exists
-          if (row.current_image_id) {
+          // Delete old images after all new images are uploaded
+          for (const imageId of imagesToDelete) {
             try {
-              await shopifyService.deleteImage(row.current_image_id, row.product_id);
+              await shopifyService.deleteImage(imageId, productId);
+              console.log(`Deleted old image ${imageId} for product ${productId}`);
             } catch (deleteError) {
-              console.warn(`Failed to delete old image ${row.current_image_id}:`, deleteError);
+              console.warn(`Failed to delete old image ${imageId}:`, deleteError);
             }
           }
 
-          imagesUpdated++;
         } catch (error) {
-          const errorMsg = `Failed to update product ${row.product_id}: ${error}`;
+          const errorMsg = `Failed to update product ${productId}: ${error}`;
           console.error(errorMsg);
           errors.push(errorMsg);
         }
