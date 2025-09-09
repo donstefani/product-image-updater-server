@@ -39,7 +39,7 @@ export async function shopifyProxyHandler(event: APIGatewayProxyEvent): Promise<
           if (productId) {
             result = await shopifyService.getProduct(productId);
           } else if (collectionId) {
-            result = await shopifyService.getProductsFromCollection(collectionId, limit);
+            result = await shopifyService.getProductsFromCollection(collectionId, limit, after);
           } else {
             result = await shopifyService.getProducts(limit, after);
           }

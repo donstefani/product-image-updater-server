@@ -273,13 +273,20 @@ export class ShopifyService {
     };
   }
 
-  // Get products from a specific collection
-  async getProductsFromCollection(collectionId: string, limit: number = 50): Promise<{ products: ShopifyProduct[] }> {
-    console.log('Getting products from collection:', collectionId, 'limit:', limit);
+  // Get products from a specific collection with pagination support
+  async getProductsFromCollection(
+    collectionId: string, 
+    limit: number = 50, 
+    after?: string
+  ): Promise<{ 
+    products: ShopifyProduct[], 
+    pageInfo: { hasNextPage: boolean, endCursor?: string } 
+  }> {
+    console.log('Getting products from collection:', collectionId, 'limit:', limit, 'after:', after);
     const query = `
-      query GetCollectionProducts($id: ID!, $first: Int!) {
+      query GetCollectionProducts($id: ID!, $first: Int!, $after: String) {
         collection(id: $id) {
-          products(first: $first) {
+          products(first: $first, after: $after) {
             edges {
               node {
                 id
@@ -326,13 +333,18 @@ export class ShopifyService {
                 createdAt
                 updatedAt
               }
+              cursor
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
             }
           }
         }
       }
     `;
 
-    const variables = { id: collectionId, first: limit };
+    const variables = { id: collectionId, first: limit, after };
     const data = await this.makeGraphQLQuery(query, variables);
     
     const products = data.collection.products.edges.map((edge: any) => ({
@@ -375,7 +387,10 @@ export class ShopifyService {
       updated_at: edge.node.updatedAt,
     }));
 
-    return { products };
+    return { 
+      products, 
+      pageInfo: data.collection.products.pageInfo 
+    };
   }
 
   // Upload image to Shopify
